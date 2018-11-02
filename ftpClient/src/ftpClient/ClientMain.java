@@ -5,115 +5,118 @@ import java.net.*;
 
 public class ClientMain {
 	public static String 	serverIp		=	"127.0.0.1";
-	public static int 		serverPort		=	6789;
-	public static int 		serverFilePort	=	6790;
-	
-	public static void receive(File file, String fileName) throws Exception
-	{
-		Socket dataSocket=new Socket(serverIp, serverFilePort);
-		
-		DataOutputStream outToServer=new DataOutputStream(dataSocket.getOutputStream());
-		outToServer.writeBytes("get\n");
-		outToServer.writeBytes(fileName);
-		outToServer.write('\n');
-		
-		int readBytes;
-		byte[] buf = new byte[4096];
-		InputStream is=dataSocket.getInputStream();
-		FileOutputStream fos=new FileOutputStream(file);
-	
-		while((readBytes=is.read(buf))!=-1) fos.write(buf,0,readBytes);
+	public static int 		serverPort		=	2020;
 
-		fos.close();
-		is.close();
-		
-		dataSocket.close();
-	}
-
-	public static void send(File file) throws Exception
-	{
-		Socket dataSocket=new Socket(serverIp, serverFilePort);
-		
-		DataOutputStream outToServer=new DataOutputStream(dataSocket.getOutputStream());
-		outToServer.writeBytes("put\n");
-		outToServer.writeBytes(file.getName());
-		outToServer.write('\n');
-		
-		int readBytes;
-		byte[] buf = new byte[4096];
-		
-		OutputStream os=dataSocket.getOutputStream();
-		FileInputStream fis=new FileInputStream(file.getCanonicalPath());
-		
-		while((readBytes=fis.read(buf))!=-1)
-		{
-			os.write(buf,0,readBytes);
-		}
-		
-		os.close();
-		fis.close();
-		
-		dataSocket.close();
-	}
-	
 	public static void main(String args[]) throws Exception
 	{
-		String cmd;
+		if(args.length>0)
+		{
+			try
+			{
+				serverPort=Integer.parseInt(args[0]);
+			}
+			catch(Exception e)
+			{
+				serverPort=2020;
+			}
+		}
 		
+		String cmd;
 		BufferedReader cin=new BufferedReader(new InputStreamReader(System.in));
 		Socket clientSocket=new Socket(serverIp, serverPort);
 		
-		DataOutputStream outToServer=new DataOutputStream(clientSocket.getOutputStream());
-		BufferedReader inFromServer=new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+		OutputStream os=clientSocket.getOutputStream();
+		InputStream  is=clientSocket.getInputStream();
+		
+		DataOutputStream outToServer=new DataOutputStream(os);
+		DataInputStream inFromServer=new DataInputStream(is);
 
 		while(true)
 		{
 			cmd=cin.readLine();
+			cmd=cmd.toLowerCase();
 			
 			if(cmd.equals("quit"))
 			{
-				outToServer.writeBytes("quit\n");
-				//clientSocket.close();
+				outToServer.writeUTF("quit");
+				outToServer.flush();
+				clientSocket.close();
 				break;
 			}
-			else if(cmd.equals("list"))
+			else if(cmd.startsWith("list"))
 			{
-				outToServer.writeBytes("list\n");
-				int gatsu=Integer.parseInt(inFromServer.readLine());
-				String files[]=new String[gatsu];
-				for(int i=0;i<gatsu;i++)
-				{
-					files[i]=inFromServer.readLine();
-				}
+				int pos=cmd.indexOf(" ");
+				String path;
+				if(pos==-1) path=".";
+				else path=cmd.substring(pos+1);
 				
-				System.out.println(gatsu);
-				for(int i=0;i<gatsu;i++)
+				outToServer.writeUTF("list");
+				outToServer.writeUTF(path);
+
+				String statusCode=inFromServer.readUTF();
+				if(statusCode.equals("200"))
 				{
-					System.out.println(files[i]);
-				}
+					String reponseLength=inFromServer.readUTF();
+					String response=inFromServer.readUTF();
 					
+					//System.out.println(statusCode);
+					//System.out.println(response.length());
+					
+					int len=Integer.parseInt(reponseLength), c=0;
+					String[] fname=new String[len];
+					String[] fsize=new String[len];
+					String cstr="";
+					
+					for(int i=0;i<=response.length();i++)
+					{
+						if(i==response.length() || response.charAt(i)==',')
+						{
+							if(c%2==0) fname[c/2]=cstr;
+							else fsize[c/2]=cstr;
+							cstr="";
+							c++;
+						}
+						else cstr+=response.charAt(i);
+					}
+					
+					for(int i=0;i<len;i++)
+					{
+						System.out.print(fname[i]+','+fsize[i]+'\n');
+					}
+				}
+				else
+				{
+					String statusPhrase=inFromServer.readUTF();
+					//System.out.println(statusCode);
+					System.out.println(statusPhrase);
+				}
 			}
 			else if(cmd.startsWith("cd"))
 			{
 				int pos=cmd.indexOf(" ");
 				String path;
-				if(pos==-1) path="";
+				if(pos==-1) path=".";
 				else path=cmd.substring(pos+1);
 				
-				outToServer.writeBytes("cd");
-				outToServer.write('\n');
-				outToServer.writeBytes(path);
-				outToServer.write('\n');
+				outToServer.writeUTF("cd");
+				outToServer.writeUTF(path);
 				
-				String ret=inFromServer.readLine();
-				System.out.println(ret);
-			}
-			else if(cmd.equals("cwd"))
-			{
-				outToServer.writeBytes("cwd");
-				outToServer.write('\n');
-				String ret=inFromServer.readLine();
-				System.out.println(ret);
+				String statusCode=inFromServer.readUTF();
+
+				if(statusCode.equals("200"))
+				{
+					String responseLength=inFromServer.readUTF();
+					String finalPath=inFromServer.readUTF();
+					//System.out.println(statusCode);
+					//System.out.println(responseLength);
+					System.out.println(finalPath);
+				}
+				else
+				{
+					String statusPhrase=inFromServer.readUTF();
+					//System.out.println(statusCode);
+					System.out.println(statusPhrase);
+				}
 			}
 			else if(cmd.startsWith("put"))
 			{
@@ -123,55 +126,87 @@ public class ClientMain {
 				File exfile=new File(fileName);
 				if(!exfile.exists())
 				{
-					System.out.println("file doesn't exist");
+					System.out.println("No such file exist");
 					continue;
 				}
 				
 				if(exfile.isDirectory())
 				{
-					System.out.println("it's a directory");
+					System.out.println("No such file exist");
 					continue;
 				}
 				
-				outToServer.writeBytes("put");
-				outToServer.write('\n');
-				outToServer.writeBytes(exfile.getName());
-				outToServer.write('\n');
+				outToServer.writeUTF("put");
+				outToServer.writeUTF(exfile.getName());
 				
-				send(exfile);
+				/* 파일 사이즈 */
+				long fileLength=exfile.length();
+				outToServer.writeUTF(Long.toString(fileLength));
 				
-				String ret=inFromServer.readLine();
-				System.out.println(ret);		
+				
+				int readBytes;
+				byte[] buf = new byte[4096];
+				FileInputStream fis=new FileInputStream(exfile);
+				
+				while(fileLength>0)
+				{
+					readBytes=fis.read(buf);
+					os.write(buf,0,readBytes);
+					fileLength-=readBytes;
+				}
+				
+				fis.close();
+				
+				String statusCode=inFromServer.readUTF();
+				String statusPhrase=inFromServer.readUTF();
+				//System.out.println(statusCode);
+				System.out.println(statusPhrase);
 			}
 			else if(cmd.startsWith("get"))
 			{
 				int pos=cmd.indexOf(" ");
 				String fileName=cmd.substring(pos+1);
 
-				outToServer.writeBytes("get");
-				outToServer.write('\n');
-				outToServer.writeBytes(fileName);
-				outToServer.write('\n');
+				outToServer.writeUTF("get");
+				outToServer.writeUTF(fileName);
 				
-				int statusCode=Integer.parseInt(inFromServer.readLine());
-				String statusPhrase=inFromServer.readLine();
-				
-				System.out.println(statusCode);
-				System.out.println(statusPhrase);
-
-				if(statusCode==1)
+				File mkfile=new File(fileName);
+				int fnum=1;
+				while(mkfile.exists())
 				{
-					/* 파일 전송 */
-					File mkfile=new File(fileName);
-					int fnum=1;
-					while(mkfile.exists())
-					{
-						mkfile=new File(fileName+fnum);
-						fnum++;
-					}
-
-					receive(mkfile, fileName);
+					mkfile=new File(fileName+fnum);
+					fnum++;
 				}
+				
+				String statusCode=inFromServer.readUTF();
+				if(statusCode.equals("200"))
+				{
+					long fileLength=Long.parseLong(inFromServer.readUTF()); long frm=fileLength;
+					int readBytes;
+					byte[] buf=new byte[4096];
+					
+					FileOutputStream fos=new FileOutputStream(mkfile);
+					
+					while(fileLength>0)
+					{
+						readBytes=is.read(buf, 0, (int)Math.min(fileLength, 4096L));
+						fos.write(buf, 0, readBytes);
+						fileLength-=readBytes;
+					}
+					
+					fos.close();
+					System.out.println("Received " + mkfile.getName() + " / " + frm + " bytes");
+				}
+				else 
+				{
+					String statusPhrase=inFromServer.readUTF();
+					//System.out.println(statusCode);
+					System.out.println(statusPhrase);
+				}
+			}
+			else
+			{
+				System.out.println("No such command, (cd,list,get,put only)");
 			}
 		}
 	}

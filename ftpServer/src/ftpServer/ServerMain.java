@@ -6,67 +6,117 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 public class ServerMain {
-	public static int 		serverPort		=	6789;
-	public static int 		serverFilePort	=	6790;
+	public static int 		serverPort		=	2020;
 	public static String 	cwd;
+	
 	public static void main(String args[]) throws Exception
 	{
+		if(args.length>0)
+		{
+			try
+			{
+				serverPort=Integer.parseInt(args[0]);
+			}
+			catch(Exception e)
+			{
+				serverPort=2020;
+			}
+		}
+		
 		String cmd;
-		
 		InetSocketAddress pnum=new InetSocketAddress(serverPort);
-		ServerSocket welcomeSocket=new ServerSocket();
-		welcomeSocket.bind(pnum);
 		
-		FileServerThread thr=new FileServerThread();
-		thr.start();
+		@SuppressWarnings("all")
+		ServerSocket welcomeSocket=new ServerSocket();
+		
+		try 
+		{
+			welcomeSocket.bind(pnum);
+		}
+		catch(Exception e)
+		{
+			System.out.println("duplicate port number");
+			System.exit(-1);
+		}
 		
 		while(true)
 		{
 			Socket connectionSocket=welcomeSocket.accept();
 			
-			BufferedReader inFromClient=new BufferedReader(new InputStreamReader(connectionSocket.getInputStream()));
-			DataOutputStream outToClient=new DataOutputStream(connectionSocket.getOutputStream());
+			InputStream is=connectionSocket.getInputStream();
+			OutputStream os=connectionSocket.getOutputStream();
+			
+			DataInputStream inFromClient=new DataInputStream(is);
+			DataOutputStream outToClient=new DataOutputStream(os);
 
 			File dir=new File("./");
 			cwd=dir.getCanonicalPath();
 			
 			while(true)
 			{
-				cmd=inFromClient.readLine();
-				dir=new File(cwd);
+				cmd=inFromClient.readUTF();
 				
 				if(cmd.equals("quit"))
 				{
-					//welcomeSocket.close();
+					outToClient.flush();
+					os.flush();
+					
+					connectionSocket.close();
 					break;
 				}
 				else if(cmd.equals("list"))
 				{
-					File[] ret=dir.listFiles();
-					outToClient.writeBytes(Integer.toString(ret.length));
-					outToClient.write('\n');
+					String rpath; Path pth;
 					
-					for(int i=0;i<ret.length;i++)
+					try
 					{
-						outToClient.writeBytes(ret[i].getName());
-						outToClient.write('\n');
+						rpath=inFromClient.readUTF();
+						pth=Paths.get(rpath);
+						
+						if(!pth.isAbsolute())
+						{
+							pth=Paths.get(cwd+"\\"+rpath);
+						}
+						
+						pth=pth.toRealPath();
 					}
-				}
-				else if(cmd.equals("cwd"))
-				{
-					outToClient.writeBytes(cwd);
-					outToClient.write('\n');
-				}
-				else if(cmd.equals("cd"))
-				{
-					String rpath=inFromClient.readLine();
-					if(rpath=="")
+					catch(Exception e)
 					{
-						outToClient.writeBytes(cwd);
-						outToClient.write('\n');
+						outToClient.writeUTF("405");
+						outToClient.writeUTF("Failed-Directory name is invalid");
 						continue;
 					}
 					
+					if(pth.toFile().isDirectory()) 
+					{
+						dir=pth.toFile();
+						File[] ret=dir.listFiles();
+						String rr = "";
+						
+						for(int i=0;i<ret.length;i++)
+						{
+							rr+=ret[i].getName();
+							rr+=',';
+							
+							if(ret[i].isDirectory()) rr+='-';
+							else rr+=ret[i].length();
+							
+							if(i!=ret.length-1) rr+=',';
+						}
+						
+						outToClient.writeUTF("200");
+						outToClient.writeUTF(Integer.toString(ret.length));
+						outToClient.writeUTF(rr);
+					}
+					else
+					{
+						outToClient.writeUTF("404");
+						outToClient.writeUTF("Failed-Directory name is invalid");
+					}
+				}
+				else if(cmd.equals("cd"))
+				{
+					String rpath=inFromClient.readUTF();			
 					Path pth=Paths.get(rpath);
 					
 					try
@@ -92,46 +142,83 @@ public class ServerMain {
 						}
 					} 
 					catch(Exception e) {
-						//e.printStackTrace();
+						outToClient.writeUTF("404");
+						outToClient.writeUTF("Failed-directory name is invalid");
+						continue;
 					}
-					outToClient.writeBytes(cwd);
-					outToClient.write('\n');
+					
+					outToClient.writeUTF("200");
+					outToClient.writeUTF(Integer.toString(cwd.length()));
+					outToClient.writeUTF(cwd);
 				}
 				else if(cmd.equals("put"))
 				{
-					String fileName=inFromClient.readLine();
+					String fileName=inFromClient.readUTF();
 					File mkfile=new File(cwd+"\\"+fileName);
 					
-					/* just overlap.
+					/* 파일 이름이 같은 게 있을 때 처리 */
 					int fnum=1;
 					while(mkfile.exists())
 					{
 						mkfile=new File(cwd+"\\"+fileName+fnum);
 						fnum++;
 					}
-					*/
+
+					long fileLength=Long.parseLong(inFromClient.readUTF()); long frm=fileLength;
+					int readBytes;
+					byte[] buf=new byte[4096];
 					
-					outToClient.writeBytes(mkfile.getCanonicalPath());
-					outToClient.write('\n');
+					try {
+					FileOutputStream fos=new FileOutputStream(mkfile);
+					
+					while(fileLength>0)
+					{
+						readBytes=is.read(buf, 0, (int)Math.min(fileLength, 4096L));
+						fos.write(buf,0,readBytes);
+						fileLength-=readBytes;
+					}
+					
+					fos.close();
+					
+					}
+					catch (Exception e)
+					{
+						outToClient.writeUTF("400");
+						outToClient.writeUTF("Failed for unknown reason");
+					}
+					
+					outToClient.writeUTF("200");
+					outToClient.writeUTF(mkfile.getName() + " transferred / " + frm + " bytes");
 				}
 				else if(cmd.equals("get"))
 				{
-					String fileName=inFromClient.readLine();
+					String fileName=inFromClient.readUTF();
 					File mkfile=new File(cwd+"\\"+fileName);
 					
 					if(mkfile.exists() && !mkfile.isDirectory())
 					{
-						outToClient.writeBytes("1");
-						outToClient.write('\n');
-						outToClient.writeBytes("OK");
-						outToClient.write('\n');
+						outToClient.writeUTF("200");
+						
+						long fileLength=mkfile.length();
+						int readBytes;
+						byte[] buf=new byte[4096];
+					
+						FileInputStream fis=new FileInputStream(mkfile);
+						outToClient.writeUTF(Long.toString(fileLength));
+						
+						while(fileLength>0)
+						{
+							readBytes=fis.read(buf);
+							os.write(buf,0,readBytes);
+							fileLength-=readBytes;
+						}
+						
+						fis.close();
 					}
 					else
 					{
-						outToClient.writeBytes("-1");
-						outToClient.write('\n');
-						outToClient.writeBytes("no such file");
-						outToClient.write('\n');
+						outToClient.writeUTF("405");
+						outToClient.writeUTF("Failed-Such file does not exist");
 					}
 				}
 			}
